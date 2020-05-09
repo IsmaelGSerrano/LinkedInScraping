@@ -15,7 +15,6 @@ class CannotProceedScrapingException(Exception):
     """Human Check from Linkedin during an headless mode execution"""
     pass
 
-
 class Location:
     def __init__(self, city='N/A', country='N/A', location='N/A'):
         self.full_string = location
@@ -32,30 +31,85 @@ class Location:
             except:
                 pass
 
+    def __str__(self):
+        if (self.city == 'N/A') and (self.country == 'N/A'):
+            return '{}'.format(self.full_string)
+        else:
+            return '{}, {}'.format(self.city,self.country)
 
 class Company:
     def __init__(self, name='N/A', industry='N/A'):
         self.name = name
         self.industry = industry
 
+    def __str__(self):
+        return '{}, {}'.format(self.name,self.industry)
+
 
 class Job:
-    def __init__(self, company=Company(), position='N/A', location=Location()):
+    def __init__(self, company=Company(), position='N/A',
+                 location=Location(), daterange="N/A"):
         self.company = company
         self.position = position
         self.location = location
+        self.daterange = daterange
 
     def __set__(self, instance, value):
         self.instance = value
 
+    def __str__(self):
+        return '''
+                  company: {0}
+                  pos: {1}
+                  loc: {2}
+                  daterange: {3}'''.format(self.company,
+                                           self.position,
+                                           self.location,
+                                           self.daterange)
+
+
+class Education:
+    def __init__(self, institution="N/A", degreename='N/A',
+                 field="N/A", start_year="N/A", end_year="N/A"):
+        self.institution = institution
+        self.degreename = degreename
+        self.field = field
+        self.start_year = start_year
+        self.end_year = end_year
+
+    def __set__(self, instance, value):
+        self.instance = value
+
+    def __str__(self):
+        return '''
+                institution: {0}
+                degree: {1}, {2}
+                dates: {3} - {4}
+                '''.format(self.institution,
+                           self.degreename,
+                           self.field,
+                           self.start_year,
+                           self.end_year)
+
 
 class Profile:
-    def __init__(self, profile_name, email, skills, last_job=Job(), job_history_summary=JobHistorySummary()):
+    def __init__(self, profile_name, email, skills, last_job=Job(), job_history_summary=JobHistorySummary(),
+                 job_list = [], edu_list=[]):
         self.profile_name = profile_name
         self.email = email
         self.skills = skills
         self.current_job = last_job if not job_history_summary.is_currently_unemployed else Job()
         self.jobs_history = job_history_summary
+        if len(job_list) == 0:
+            self.job_list = [Job()]
+        else:
+            self.job_list = job_list
+
+        if len(edu_list) == 0:
+            self.edu_list = [Education()]
+        else:
+            self.edu_list = edu_list
+
 
 
 def linkedin_logout(browser):

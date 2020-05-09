@@ -1,14 +1,16 @@
 import traceback
 from threading import Thread
+import sys, traceback
 
 from pyvirtualdisplay import Display
 
 from job_history_summary import JobHistorySummary
-from utils import Profile, Location, Job, Company, CannotProceedScrapingException
+from utils import Profile, Location, Job, Education, Company, CannotProceedScrapingException
 from datetime import datetime
 import time
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException
 from utils import linkedin_login, is_url_valid, HumanCheckException, message_to_user, get_browser_options, linkedin_logout
 
 
@@ -49,6 +51,8 @@ class ProfileScraper(Thread):
                                         options=get_browser_options(headless_option, config))
 
         self.industries_dict = {}
+        self.companies_dict = {}
+        self.locations_dict = {}
 
         self.config = config
 
@@ -138,9 +142,21 @@ class ProfileScraper(Thread):
 
             # Get all the job positions
             try:
-                job_positions = self.browser.find_element_by_id('experience-section').find_elements_by_tag_name('li')
-            except:
+                job_positions = self.browser\
+                    .find_element_by_id('experience-section')\
+                    .find_elements_by_tag_name('li')
+            except NoSuchElementException:
+                print("job_positions is null")
                 job_positions = []
+
+            # Get all the education positions
+            try:
+                education_positions = self.browser\
+                    .find_element_by_id('education-section')\
+                    .find_elements_by_tag_name('li')
+            except NoSuchElementException:
+                print("job_positions is null")
+                education_positions = []
 
             # Parsing of the page html structure
             soup = BeautifulSoup(self.browser.page_source, 'lxml')
@@ -168,87 +184,46 @@ class ProfileScraper(Thread):
                 skills = []
 
             # Parsing the job positions
+
             if len(job_positions) > 0:
-
                 # Parse job positions to extract relative the data ranges
-                job_positions_data_ranges = []
-                for job_position in job_positions:
+                js = self.parsing_jobs(job_positions)
+                job_positions_data_ranges = js['job_positions_data_ranges']
+                Jobs_array = js['Jobs_array']
+                last_job = Jobs_array[0]
 
-                    # Get the date range of the job position
-                    try:
-                        date_range_element = job_position.find_element_by_class_name('pv-entity__date-range')
-                        date_range_spans = date_range_element.find_elements_by_tag_name('span')
-                        date_range = date_range_spans[1].text
+                if len(education_positions) > 0:
+                    eds = self.parsing_educations(education_positions)
 
-                        job_positions_data_ranges.append(date_range)
-                    except:
-                        pass
-
-                # Scraping of the last (hopefully current) Job
-                exp_section = soup.find('section', {'id': 'experience-section'})
-                exp_section = exp_section.find('ul')
-                div_tags = exp_section.find('div')
-                a_tags = div_tags.find('a')
-
-                # Scraping of the last Job - company_name, job_title
-                try:
-                    last_job_company_name = a_tags.find_all('p')[1].get_text().strip()
-                    last_job_title = a_tags.find('h3').get_text().strip()
-
-                    spans = a_tags.find_all('span')
-                except:
-                    last_job_company_name = a_tags.find_all('span')[1].get_text().strip()
-                    last_job_title = exp_section.find('ul').find('li').find_all('span')[2].get_text().strip()
-
-                    spans = exp_section.find('ul').find('li').find_all('span')
-
-                last_job_company_name = last_job_company_name.replace('Full-time', '').replace('Part-time', '').strip()
-
-                # Scraping of last Job - location
-                last_job_location = Location()
-                next_span_is_location = False
-                for span in spans:
-                    if next_span_is_location:
-                        last_job_location.parse_string(span.get_text().strip())
-                        break
-                    if span.get_text().strip() == 'Location':
-                        next_span_is_location = True
-
-                # Scraping of Industry related to last Job
-                last_job_company_url = a_tags.get('href')
-                if last_job_company_url not in self.industries_dict:
-                    try:
-                        self.browser.get('https://www.linkedin.com' + last_job_company_url)
-                        self.industries_dict[last_job_company_url] = self.browser.execute_script(
-                            "return document.getElementsByClassName("
-                            "'org-top-card-summary-info-list__info-item')["
-                            "0].innerText")
-                    except:
-                        self.industries_dict[last_job_company_url] = 'N/A'
-
-                last_job_company_industry = self.industries_dict[last_job_company_url]
-
-                last_job = Job(
-                    position=last_job_title,
-                    company=Company(
-                        name=last_job_company_name,
-                        industry=last_job_company_industry
-                    ),
-                    location=last_job_location
-                )
-
-                return ScrapingResult(
-                    Profile(
-                        profile_name,
-                        email,
-                        skills,
-                        last_job,
-                        JobHistorySummary(
-                            profile_known_graduation_date,
-                            job_positions_data_ranges
+                    return ScrapingResult(
+                        Profile(
+                            profile_name,
+                            email,
+                            skills,
+                            last_job,
+                            JobHistorySummary(
+                                profile_known_graduation_date,
+                                job_positions_data_ranges
+                            ),
+                            Jobs_array,
+                            eds
                         )
                     )
-                )
+
+                else:
+                    return ScrapingResult(
+                        Profile(
+                            profile_name,
+                            email,
+                            skills,
+                            last_job,
+                            JobHistorySummary(
+                                profile_known_graduation_date,
+                                job_positions_data_ranges
+                            ),
+                            Jobs_array
+                        )
+                    )
 
             else:
                 return ScrapingResult(
@@ -270,6 +245,259 @@ class ProfileScraper(Thread):
                 time.sleep(30)
 
             return self.scrap_profile(profile_linkedin_url, profile_known_graduation_date)
+
+    def parsing_educations(self, education_positions):
+        education_array = []
+
+        for education_position in education_positions:
+            try:
+                # get the institution
+                try:
+                    institution_element = education_position.find_element_by_tag_name('h3')
+                    institution = institution_element.text
+                except NoSuchElementException:
+                    institution = "N/A"
+
+                try:
+                    degreename_range_element = education_position\
+                        .find_element_by_class_name('pv-entity__degree-info')
+                    degreename_range_spans = degreename_range_element\
+                        .find_elements_by_tag_name('span')
+                    is_degreename = False
+                    is_field = False
+                    degreename = "N/A"
+                    field = "N/A"
+                    for span in degreename_range_spans:
+                        if not is_degreename:
+                            if span.text == "Degree Name":
+                                is_degreename = True
+                                pass
+                        else:
+                            degreename = span.text
+                            is_degreename = False
+                        if not is_field:
+                            if span.text == "Field Of Study":
+                                is_field = True
+                        else:
+                            field = span.text
+                            is_field = False
+                except NoSuchElementException:
+                    degreename = "N/A"
+                    field = "N/A"
+
+                try:
+                    start_year = "N/A"
+                    end_year = "N/A"
+                    dates_range_element = education_position\
+                        .find_element_by_class_name("pv-entity__dates")
+                    dates_spans = dates_range_element\
+                        .find_elements_by_tag_name("span")
+                    years_range = dates_spans[1]\
+                        .find_elements_by_tag_name("time")
+                    start_year = years_range[0].text
+                    end_year = years_range[1].text
+                except NoSuchElementException as ens:
+                    print("Oops!", ens, "occured.")
+
+                # class Education
+                educacion_oo = Education(institution,
+                                         degreename,
+                                         field,
+                                         start_year,
+                                         end_year)
+
+                # print(educacion_oo)
+
+                education_array.append(educacion_oo)
+
+            except:
+                print("Oops!, \n{}\n{}\n{}\n."
+                      .format(sys.exc_info()[0],
+                              sys.exc_info()[1],
+                              traceback.print_tb(sys.exc_info()[2],
+                                                 limit=1,
+                                                 file=sys.stdout)
+                              )
+                      )
+                print("Edu untacking error")
+                pass
+
+        return education_array
+
+
+    def parsing_jobs(self, job_positions):
+        job_positions_data_ranges = []
+        #array of Jobs
+        Jobs_array = []
+
+        for job_position in job_positions:
+            #print('job_pos.text: {0}\n--'.format(job_position.text))
+            try:
+                # Get the date range of the job position
+                # get the date_range
+                try:                       
+                    date_range_element = job_position.find_element_by_class_name('pv-entity__date-range')
+                    date_range_spans = date_range_element.find_elements_by_tag_name('span')
+                    date_range = date_range_spans[1].text
+                    # print('date_range: {0}'.format(date_range))
+                except NoSuchElementException:
+                    date_range = "N/A"
+
+                try:
+                    # get the title
+                    title_range_element = job_position.find_element_by_tag_name('h3')
+                    title = title_range_element.text
+                    # print('title: {0}'.format(title))
+                except NoSuchElementException:
+                    title = "N/A"
+
+                try:
+                    # get the companyname
+                    companyname_range_element = job_position.find_element_by_class_name('pv-entity__secondary-title')
+                    companyname = companyname_range_element
+                    companyname = companyname.text.replace('Full-time', '').replace('Part-time', '').strip()
+                    # print('companyname: {0}'.format(companyname))
+                except NoSuchElementException:
+                    companyname = "N/A"
+
+                try:
+                    # get the company info using bautifulsoup
+                    company_url_link = job_position.find_element_by_tag_name('a').get_attribute('href')
+                except NoSuchElementException:
+                    company_url_link = "N/A"
+
+                try: 
+                    companylocation_range_element = job_position.find_element_by_class_name('pv-entity__location')
+                    companylocation_spans = companylocation_range_element.find_elements_by_tag_name('span')
+                    companylocation = companylocation_spans[1].text
+                except NoSuchElementException:    
+                    companylocation = "N/A"
+                # print('companylocation: {0}'.format(companylocation))
+
+                job_positions_data_ranges.append(date_range)
+                info_company = self.get_company_data(company_url_link)
+                try:                   
+                    if info_company['companyname'] == "N/A":
+                        info_company['companyname'] = companyname
+                    if info_company['location'].full_string == "N/A":
+                        loc = Location()
+                        loc.parse_string(companylocation)
+                        info_company['location'] = loc
+                except: 
+                    print("Oops!", sys.exc_info()[0], "occured.")
+                    print(info_company['industry'])
+                    print(info_company['companyname'])
+                    print(info_company['location'])
+
+                trabajo_oo = Job(
+                    position=title.strip(),
+                    company=Company(
+                        name=info_company['companyname'].strip(),
+                        industry=info_company['industry'].strip()
+                    ),
+                    location=info_company['location'],
+                    daterange=date_range.strip()
+                )
+                Jobs_array.append(trabajo_oo)
+                # print(trabajo_oo)
+
+            except:
+                print("Oops!, \n{}\n{}\n{}\noccured.".format(sys.exc_info()[0],
+                                                                      sys.exc_info()[1],
+                                                                      sys.exc_info()[2]))
+                print("Job untacking error")
+                pass
+
+        return {'Jobs_array':Jobs_array,
+                "job_positions_data_ranges":job_positions_data_ranges}
+
+
+    def get_company_data(self, url):
+        #print(url)
+        no_industry = False
+        if url.split("/")[3] != "company":
+            print("no company page")
+            return {'industry':'N/A',
+                    'companyname':'N/A',
+                    'location':Location('N/A','N/A','N/A')}
+
+        if url not in self.industries_dict:
+            try:
+                self.browser.execute_script("window.open('');")
+                self.browser.switch_to.window(self.browser.window_handles[1])
+                self.browser.get(url)
+            except:
+                print("error opening company page")
+                return {'industry':'N/A',
+                        'companyname':'N/A',
+                        'location':Location('N/A','N/A','N/A')}
+            try:
+                card_summary_divs = self.browser\
+                    .find_element_by_class_name('org-top-card-summary-info-list')\
+                    .find_elements_by_class_name('org-top-card-summary-info-list__info-item')
+                inline_divs = self.browser\
+                    .find_element_by_class_name('org-top-card-summary-info-list')\
+                    .find_element_by_class_name('inline-block')\
+                    .find_elements_by_class_name('org-top-card-summary-info-list__info-item')
+                if len(card_summary_divs) == len(inline_divs):
+                    no_industry = True
+                #print("card_summary_divs {}, inline_divs {}".format(len(card_summary_divs),
+                #                                                    len(inline_divs)))
+            except:
+                print("error getting company data 3")
+            #industry
+            try:
+                if no_industry:
+                    self.industries_dict[url] = "N/A"
+                else:
+                    self.industries_dict[url] = self.browser.execute_script(
+                        "return document.getElementsByClassName("
+                        "'org-top-card-summary-info-list__info-item')["
+                        "0].innerText")
+            except:
+                #print("industry wasnt scrapped")
+                self.industries_dict[url] = 'N/A'
+            #companyname
+            try:
+                self.companies_dict[url] = self.browser.execute_script(
+                    "return document.getElementsByClassName("
+                    "'org-top-card-summary__title')["
+                    "0].title")
+            except:
+                print("company name wasnt scrapped")
+                self.companies_dict[url] = 'N/A'
+            #locations
+            try:
+                if no_industry:
+                    self.locations_dict[url] = self.browser.execute_script(
+                        "return document.getElementsByClassName("
+                        "'org-top-card-summary-info-list__info-item')["
+                        "0].innerText")
+                else:
+                    self.locations_dict[url] = self.browser.execute_script(
+                        "return document.getElementsByClassName("
+                        "'org-top-card-summary-info-list__info-item')["
+                        "1].innerText")
+            except:
+                print("location name wasnt scrapped")
+                self.locations_dict[url] = 'N/A'
+
+            try:
+                self.browser.close()
+                self.browser.switch_to.window(self.browser.window_handles[0])
+            except:
+                print("tab did not close")
+
+
+
+        industry = self.industries_dict[url]
+        companyname = self.companies_dict[url]
+        location = Location()
+        location.parse_string(self.locations_dict[url])
+
+        return {'industry':industry,
+                'companyname':companyname,
+                'location':location}
 
     def run(self):
 

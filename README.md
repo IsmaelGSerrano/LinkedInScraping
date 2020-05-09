@@ -1,3 +1,11 @@
+---
+
+### Ismael's Fork Version notes
+
+The scraping from Likedin adresses takes all the jobs and all the education.
+The new file scrap_profiles_simple.py is for another excel file output sheme
+
+--- 
 # LinkedIn Scraping with Python
 
 Creates an Excel file containing personal data and last job position of specified people.
